@@ -2,15 +2,15 @@
     // ID of the role given to veteran members.  The bot will add this role to
     // registered veterans and remove it when their plant dies.  Replace with
     // your server's veteran role ID.
-    "veteran_role_id": 0,
+    "veteran_role_id": 832664949137604648,
 
     // Category ID under which private plant channels will be created.  The
     // bot must have permission to create channels here.
-    "veteran_category_id": 0,
+    "veteran_category_id": 1407106143767232545,
 
     // List of channel IDs where chatting earns XP and coins.  Messages sent
     // outside these channels are ignored.
-    "reward_channel_ids": [],
+    "reward_channel_ids": [930876773846106142],
 
     // Cost in coins to water the plant.  Each watering resets the water
     // meter to the maximum.
@@ -26,7 +26,7 @@
     "water_decrease_interval_minutes": 60,
 
     // Amount of water lost each interval.
-    "water_decrease_amount": 1,
+    "water_decrease_amount": 10,
 
     // Amount of XP awarded per eligible message.
     "xp_per_message": 5,
