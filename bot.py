@@ -214,8 +214,7 @@ class VeteranBot(commands.Bot):
             except ValueError:
                 continue
 
-        # Start background task to degrade water
-        self.degrade_task.start()
+
 
     async def setup_hook(self) -> None:
         """Register commands during setup."""
@@ -298,6 +297,8 @@ class VeteranBot(commands.Bot):
 
         # Sync commands to all guilds this bot is a member of
         await self.tree.sync()
+        if not self.degrade_task.is_running():
+            self.degrade_task.start()
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (ID: {self.user.id})")
