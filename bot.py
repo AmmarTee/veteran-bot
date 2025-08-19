@@ -217,88 +217,78 @@ class VeteranBot(commands.Bot):
 
 
     async def setup_hook(self) -> None:
-        """Register commands during setup."""
-        # Register slash commands here
-        @self.tree.command(name="configure", description="Configure bot settings (admin only)")
-        @discord.app_commands.describe(setting="Name of the setting to change", value="New value")
-        async def configure(interaction: discord.Interaction, setting: str, value: str):
-            """Administrative slash command to change configuration values.
+    """Register commands during setup."""
+    # Register slash commands here
+    @self.tree.command(name="configure", description="Configure bot settings (admin only)")
+    @discord.app_commands.describe(setting="Name of the setting to change", value="New value")
+    async def configure(interaction: discord.Interaction, setting: str, value: str):
+        # (same code you already have…)
+        # ------------------------------
 
-            Only users with administrator or manage guild permission may use this
-            command.  Supported settings include veteran_role_id,
-            veteran_category_id, reward_channel_ids, water_cost, plant_max_water,
-            water_decrease_interval_minutes, water_decrease_amount,
-            xp_per_message, coins_per_message, message_cooldown_seconds and
-            max_coins_send_per_day.  Channels and roles can be supplied as
-            mentions or by raw IDs.
-            """
-            # Permission check
-            if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
-                await interaction.response.send_message("You do not have permission to configure the bot.", ephemeral=True)
+        if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You do not have permission to configure the bot.", ephemeral=True)
+            return
+        key = setting
+        if key in {"veteran_role_id", "veteran_category_id", "water_cost", "plant_max_water", "water_decrease_interval_minutes", "water_decrease_amount", "xp_per_message", "coins_per_message", "message_cooldown_seconds", "max_coins_send_per_day"}:
+            try:
+                self.config[key] = int(value)
+            except ValueError:
+                await interaction.response.send_message(f"Expected integer value for {key}.", ephemeral=True)
                 return
-            key = setting
-            # Attempt to parse int for numeric settings or channel/role IDs
-            if key in {"veteran_role_id", "veteran_category_id", "water_cost", "plant_max_water", "water_decrease_interval_minutes", "water_decrease_amount", "xp_per_message", "coins_per_message", "message_cooldown_seconds", "max_coins_send_per_day"}:
+        elif key == "reward_channel_ids":
+            ids: List[int] = []
+            for part in value.replace("<", "").replace(">", "").split(","):
+                part = part.strip()
+                if part.startswith("#"):
+                    part = part.lstrip("#")
                 try:
-                    self.config[key] = int(value)
+                    ids.append(int(part))
                 except ValueError:
-                    await interaction.response.send_message(f"Expected integer value for {key}.", ephemeral=True)
-                    return
-            elif key == "reward_channel_ids":
-                # Accept a comma separated list of channel mentions or IDs
-                ids: List[int] = []
-                for part in value.replace("<", "").replace(">", "").split(","):
-                    part = part.strip()
-                    if part.startswith("#"):
-                        part = part.lstrip("#")
-                    try:
-                        ids.append(int(part))
-                    except ValueError:
-                        continue
-                self.config[key] = ids
-            else:
-                await interaction.response.send_message(f"Unknown setting: {key}", ephemeral=True)
-                return
-            # Persist configuration
-            save_json(CONFIG_FILE, self.config)
-            # Propagate new config to VeteranData instances
-            for v in self.veterans.values():
-                v.config = self.config
-            await interaction.response.send_message(f"Configuration `{key}` updated to `{value}`.", ephemeral=True)
+                    continue
+            self.config[key] = ids
+        else:
+            await interaction.response.send_message(f"Unknown setting: {key}", ephemeral=True)
+            return
+        save_json(CONFIG_FILE, self.config)
+        for v in self.veterans.values():
+            v.config = self.config
+        await interaction.response.send_message(f"Configuration `{key}` updated to `{value}`.", ephemeral=True)
 
-        @self.tree.command(name="register", description="Manually register a member as a veteran")
-        @discord.app_commands.describe(member="The member to register")
-        async def register_member(interaction: discord.Interaction, member: discord.Member):
-            """Slash command for admins to register a member as a veteran and create their channel."""
-            if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
-                await interaction.response.send_message("You do not have permission to register veterans.", ephemeral=True)
-                return
-            if member.id in self.veterans:
-                await interaction.response.send_message(f"{member.display_name} is already registered.", ephemeral=True)
-                return
-            await self.create_veteran(member)
-            await interaction.response.send_message(f"Registered {member.display_name} as a veteran.", ephemeral=True)
+    @self.tree.command(name="register", description="Manually register a member as a veteran")
+    @discord.app_commands.describe(member="The member to register")
+    async def register_member(interaction: discord.Interaction, member: discord.Member):
+        if not interaction.user.guild_permissions.manage_guild and not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You do not have permission to register veterans.", ephemeral=True)
+            return
+        if member.id in self.veterans:
+            await interaction.response.send_message(f"{member.display_name} is already registered.", ephemeral=True)
+            return
+        await self.create_veteran(member)
+        await interaction.response.send_message(f"Registered {member.display_name} as a veteran.", ephemeral=True)
 
-        @self.tree.command(name="leaderboard", description="Show the veteran leaderboard")
-        async def leaderboard(interaction: discord.Interaction):
-            """Send an embed with the top veterans by plant age and XP."""
-            await self.send_leaderboard(interaction.channel)
-            await interaction.response.send_message("Sent leaderboard.", delete_after=0)
+    @self.tree.command(name="leaderboard", description="Show the veteran leaderboard")
+    async def leaderboard(interaction: discord.Interaction):
+        await self.send_leaderboard(interaction.channel)
+        await interaction.response.send_message("Sent leaderboard.", delete_after=0)
 
-        @self.tree.command(name="mystats", description="Show your plant stats")
-        async def mystats(interaction: discord.Interaction):
-            """Send an embed with the caller's plant stats."""
-            vdata = self.veterans.get(interaction.user.id)
-            if not vdata:
-                await interaction.response.send_message("You are not registered as a veteran.", ephemeral=True)
-                return
-            embed = self.build_stats_embed(interaction.user, vdata)
-            await interaction.response.send_message(embed=embed, view=self.build_veteran_view(interaction.user.id), delete_after=0)
+    @self.tree.command(name="mystats", description="Show your plant stats")
+    async def mystats(interaction: discord.Interaction):
+        vdata = self.veterans.get(interaction.user.id)
+        if not vdata:
+            await interaction.response.send_message("You are not registered as a veteran.", ephemeral=True)
+            return
+        embed = self.build_stats_embed(interaction.user, vdata)
+        await interaction.response.send_message(embed=embed, view=self.build_veteran_view(interaction.user.id), delete_after=0)
 
-        # Sync commands to all guilds this bot is a member of
-        await self.tree.sync()
-        if not self.degrade_task.is_running():
-            self.degrade_task.start()
+    # --- 🔑 IMPORTANT: sync commands instantly to your guild ---
+    TEST_GUILD = discord.Object(id=740784147798163508)
+    self.tree.copy_global_to(guild=TEST_GUILD)
+    await self.tree.sync(guild=TEST_GUILD)
+
+    # Start background task
+    if not self.degrade_task.is_running():
+        self.degrade_task.start()
+
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (ID: {self.user.id})")
