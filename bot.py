@@ -1,10 +1,17 @@
 """
-Veteran Club Discord Bot
-- Message-based XP/coins in configured channels
-- Per-veteran private plant channel with BUTTONS (water, send coins, leaderboard)
-- Plant water degrades over time; if it hits 0: remove Veteran role + delete channel
-- Leaderboard and per-user stats
-- Admin /configure to change settings at runtime
+Veteran Club Discord Bot (Per-Veteran Channels; Owner-Only Actions; Daily Leaderboard Refresh)
+
+- Auto-detects veterans by role; no manual /register.
+- Creates one channel per veteran in the configured category.
+- All veterans can SEE every veteran channel; ONLY the owner can Water/Send from their panel.
+- Earn coins/XP in configured reward channels.
+- Plant degrades; on death => remove Veteran role + delete the veteran’s channel and panel.
+- Persistent buttons across restarts.
+- Admin commands: /configure, /leaderboard, /mystats, /resync_veterans.
+- NEW: “🔄 Update Leaderboard (1/day)” button on every panel:
+  * Any veteran can press it, in any veteran channel.
+  * Posts the leaderboard in that channel.
+  * Per-veteran cooldown: once per UTC day.
 
 Requires: discord.py >= 2.1
 """
@@ -61,6 +68,10 @@ class VeteranData:
         self.coins_sent_today: int = data.get("coins_sent_today", 0)
         self.last_coins_reset: str = data.get("last_coins_reset", date.today().isoformat())
         self.channel_id: Optional[int] = data.get("channel_id")
+        self.panel_message_id: Optional[int] = data.get("panel_message_id")
+
+        # NEW: per-veteran daily limit for pressing the leaderboard refresh button
+        self.last_lb_refresh: str = data.get("last_lb_refresh", "")  # ISO YYYY-MM-DD
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -72,6 +83,8 @@ class VeteranData:
             "coins_sent_today": self.coins_sent_today,
             "last_coins_reset": self.last_coins_reset,
             "channel_id": self.channel_id,
+            "panel_message_id": self.panel_message_id,
+            "last_lb_refresh": self.last_lb_refresh,
         }
 
     def add_xp_coins(self, xp_amount: int, coin_amount: int) -> None:
@@ -123,7 +136,7 @@ class VeteranData:
 
 # ---------- Bot ----------
 class VeteranBot(commands.Bot):
-    TEST_GUILD_ID = 740784147798163508  # set to your guild
+    TEST_GUILD_ID = 740784147798163508  # set to your guild for instant command sync
 
     def __init__(self, **kwargs: Any) -> None:
         intents = discord.Intents.default()
@@ -137,9 +150,9 @@ class VeteranBot(commands.Bot):
         self.config: Dict[str, Any] = load_json(
             CONFIG_FILE,
             {
-                "veteran_role_id": 0,
-                "veteran_category_id": 0,
-                "reward_channel_ids": [],
+                "veteran_role_id": 0,                # role that marks veterans
+                "veteran_category_id": 0,            # category for per-veteran channels
+                "reward_channel_ids": [],            # channels where chat earns XP/coins
                 "water_cost": 10,
                 "plant_max_water": 100,
                 "water_decrease_interval_minutes": 60,
@@ -163,47 +176,73 @@ class VeteranBot(commands.Bot):
     def save_all(self) -> None:
         save_json(DATA_FILE, {str(uid): v.to_dict() for uid, v in self.veterans.items()})
 
-    # ---------- Views / Buttons (manual add_item; NO decorators) ----------
-    def build_veteran_view(self, user_id: int) -> discord.ui.View:
+    def build_stats_embed(self, member: discord.Member | discord.User, v: VeteranData) -> discord.Embed:
+        e = discord.Embed(title=f"{member.display_name}'s Plant", colour=discord.Colour.green())
+        e.add_field(name="Level", value=str(v.level), inline=True)
+        e.add_field(name="XP", value=str(v.xp), inline=True)
+        e.add_field(name="Coins", value=str(v.coins), inline=True)
+        e.add_field(name="Age (days)", value=f"{v.age_days:.1f}", inline=True)
+        e.add_field(name="Water", value=f"{int(v.water_level)}/{self.config.get('plant_max_water', 100)}", inline=True)
+        e.set_footer(text="Use the buttons below to interact with your plant.")
+        return e
+
+    def build_leaderboard_embed(self) -> discord.Embed:
+        embed = discord.Embed(title="Veteran Leaderboard", colour=discord.Colour.gold())
+        if not self.veterans:
+            embed.description = "No veterans detected yet."
+            return embed
+        sorted_members = sorted(self.veterans.items(), key=lambda kv: (-kv[1].age_days, -kv[1].xp))
+        lines = []
+        for idx, (user_id, vdata) in enumerate(sorted_members[:20], start=1):
+            lines.append(
+                f"**{idx}. <@{user_id}>** – Level {vdata.level}, XP {vdata.xp}, "
+                f"Age {vdata.age_days:.1f}d, Coins {vdata.coins}"
+            )
+        embed.description = "\n".join(lines)
+        return embed
+
+    # ---------- Views / Buttons (owner-gated actions + daily LB refresh) ----------
+    def build_veteran_view(self, owner_id: int) -> discord.ui.View:
         """
-        Returns a persistent View with three buttons. We create Button objects,
-        assign callbacks, and add them to the view. This guarantees buttons render.
+        Buttons created explicitly and added to the View; stable custom_ids.
+        Only the owner (owner_id) can Water/Send; others see but get denied on press.
+        Any veteran can press the daily leaderboard refresh (once per UTC day).
         """
         view = discord.ui.View(timeout=None)
-        bot = self  # capture for callbacks
+        bot = self
 
-        # Water Plant
+        # Water Plant (owner-only)
         async def water_callback(inter: discord.Interaction):
-            if inter.user.id != user_id:
-                await inter.response.send_message("This isn’t your plant.", ephemeral=True)
+            if inter.user.id != owner_id:
+                await inter.response.send_message("Only the plant owner can water this plant.", ephemeral=True)
                 return
-            v = bot.veterans.get(user_id)
+            v = bot.veterans.get(owner_id)
             if not v:
-                await inter.response.send_message("You are not registered.", ephemeral=True)
+                await inter.response.send_message("No plant data found.", ephemeral=True)
                 return
             if v.water_plant():
                 bot.save_all()
-                embed = bot.build_stats_embed(inter.user, v)
-                await inter.response.edit_message(embed=embed, view=bot.build_veteran_view(user_id))
+                member = inter.guild.get_member(owner_id) if inter.guild else inter.user
+                embed = bot.build_stats_embed(member, v)
+                try:
+                    await inter.response.edit_message(embed=embed, view=bot.build_veteran_view(owner_id))
+                except discord.InteractionResponded:
+                    await inter.followup.edit_message(inter.message.id, embed=embed, view=bot.build_veteran_view(owner_id))
                 await inter.followup.send("Watered! 🌱", ephemeral=True)
             else:
                 await inter.response.send_message("Not enough coins.", ephemeral=True)
 
-        water_btn = discord.ui.Button(
-            label="💧 Water Plant",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"water:{user_id}",
-        )
+        water_btn = discord.ui.Button(label="💧 Water Plant", style=discord.ButtonStyle.primary, custom_id=f"water:{owner_id}")
         water_btn.callback = water_callback
         view.add_item(water_btn)
 
-        # Send Coins
+        # Send Coins (owner-only; opens modal)
         async def send_open_modal(inter: discord.Interaction):
-            if inter.user.id != user_id:
-                await inter.response.send_message("Use this on your own plant.", ephemeral=True)
+            if inter.user.id != owner_id:
+                await inter.response.send_message("Only the plant owner can send coins from this panel.", ephemeral=True)
                 return
-            if user_id not in bot.veterans:
-                await inter.response.send_message("You are not registered.", ephemeral=True)
+            if owner_id not in bot.veterans:
+                await inter.response.send_message("No plant data found.", ephemeral=True)
                 return
 
             class SendCoinsModal(discord.ui.Modal, title="Send Coins"):
@@ -219,9 +258,9 @@ class VeteranBot(commands.Bot):
                 )
 
                 async def on_submit(self, modal_inter: discord.Interaction) -> None:
-                    sender = bot.veterans.get(user_id)
+                    sender = bot.veterans.get(owner_id)
                     if not sender:
-                        await modal_inter.response.send_message("You are not registered.", ephemeral=True)
+                        await modal_inter.response.send_message("No plant data found.", ephemeral=True)
                         return
 
                     raw = self.recipient.value.replace("<@", "").replace("<@!", "").replace(">", "")
@@ -240,7 +279,7 @@ class VeteranBot(commands.Bot):
                     if amt <= 0:
                         await modal_inter.response.send_message("Amount must be positive.", ephemeral=True)
                         return
-                    if target_id == user_id:
+                    if target_id == owner_id:
                         await modal_inter.response.send_message("You cannot send coins to yourself.", ephemeral=True)
                         return
 
@@ -263,43 +302,61 @@ class VeteranBot(commands.Bot):
 
             await inter.response.send_modal(SendCoinsModal())
 
-        send_btn = discord.ui.Button(
-            label="💸 Send Coins",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"send:{user_id}",
-        )
+        send_btn = discord.ui.Button(label="💸 Send Coins", style=discord.ButtonStyle.secondary, custom_id=f"send:{owner_id}")
         send_btn.callback = send_open_modal
         view.add_item(send_btn)
 
-        # Leaderboard
-        async def lb_callback(inter: discord.Interaction):
-            await inter.response.defer(ephemeral=True)
-            await bot.send_leaderboard(inter.channel)
-            await inter.followup.send("Leaderboard posted.", ephemeral=True)
+        # NEW: Daily Leaderboard Refresh (any veteran; 1/day)
+        async def refresh_lb_callback(inter: discord.Interaction):
+            # Must be a veteran
+            role_id = bot.config.get("veteran_role_id", 0)
+            if not role_id or not inter.guild:
+                await inter.response.send_message("Leaderboard refresh is not available.", ephemeral=True)
+                return
+            if not any(r.id == role_id for r in inter.user.roles):
+                await inter.response.send_message("Only veterans can refresh the leaderboard.", ephemeral=True)
+                return
 
-        lb_btn = discord.ui.Button(
-            label="🏆 Leaderboard",
+            # Ensure we have a VeteranData record for the pressing user
+            pressing = bot.veterans.get(inter.user.id)
+            if not pressing:
+                pressing = VeteranData(inter.user.id, {}, bot.config)
+                bot.veterans[inter.user.id] = pressing
+
+            today = date.today().isoformat()  # UTC-based midnight boundary
+            if pressing.last_lb_refresh == today:
+                await inter.response.send_message("You’ve already refreshed the leaderboard today. Try again tomorrow.", ephemeral=True)
+                return
+
+            # Update cooldown and post the leaderboard in this channel
+            pressing.last_lb_refresh = today
+            bot.save_all()
+
+            # Permission sanity
+            if isinstance(inter.channel, discord.abc.GuildChannel):
+                perms = inter.channel.permissions_for(inter.guild.me)
+                if not perms.send_messages:
+                    await inter.response.send_message("I can't send messages in this channel.", ephemeral=True)
+                    return
+                if not perms.embed_links:
+                    await inter.response.send_message("I need **Embed Links** permission here.", ephemeral=True)
+                    return
+
+            await inter.response.send_message(embed=bot.build_leaderboard_embed())  # public
+
+        refresh_btn = discord.ui.Button(
+            label="🔄 Update Leaderboard (1/day)",
             style=discord.ButtonStyle.success,
-            custom_id=f"lb:{user_id}",
+            custom_id=f"lb:refresh:{owner_id}",
         )
-        lb_btn.callback = lb_callback
-        view.add_item(lb_btn)
+        refresh_btn.callback = refresh_lb_callback
+        view.add_item(refresh_btn)
 
         return view
 
-    # ---------- Embeds ----------
-    def build_stats_embed(self, member: discord.Member | discord.User, v: VeteranData) -> discord.Embed:
-        e = discord.Embed(title=f"{member.display_name}'s Plant", colour=discord.Colour.green())
-        e.add_field(name="Level", value=str(v.level), inline=True)
-        e.add_field(name="XP", value=str(v.xp), inline=True)
-        e.add_field(name="Coins", value=str(v.coins), inline=True)
-        e.add_field(name="Age (days)", value=f"{v.age_days:.1f}", inline=True)
-        e.add_field(name="Water", value=f"{int(v.water_level)}/{self.config.get('plant_max_water', 100)}", inline=True)
-        e.set_footer(text="Use the buttons below to interact with your plant.")
-        return e
-
     # ---------- Channel/Role Helpers ----------
     async def get_or_create_veteran_channel(self, guild: discord.Guild, member: discord.Member) -> Optional[discord.TextChannel]:
+        """Create/fetch the veteran's channel under category; visible to all veterans, private from others."""
         v = self.veterans.get(member.id)
         if v and v.channel_id:
             ch = guild.get_channel(v.channel_id)
@@ -307,45 +364,94 @@ class VeteranBot(commands.Bot):
                 return ch
 
         cat_id = self.config.get("veteran_category_id", 0)
-        if not cat_id:
+        role_id = self.config.get("veteran_role_id", 0)
+        if not cat_id or not role_id:
             return None
+
         category = guild.get_channel(cat_id)
         if not isinstance(category, discord.CategoryChannel):
             return None
 
-        name = f"{member.name}-plant"
+        veteran_role = guild.get_role(role_id)
+        if not veteran_role:
+            return None
+
+        name = f"🌱-{member.name}".lower().replace(" ", "-")
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            veteran_role: discord.PermissionOverwrite(view_channel=True, read_message_history=True, send_messages=True),
             member: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_messages=True, manage_channels=True),
         }
+
         ch = await guild.create_text_channel(
             name=name,
             category=category,
             overwrites=overwrites,
-            topic=f"Private plant channel for {member.display_name}",
+            topic=f"Plant channel for {member.display_name} (visible to all Veterans; owner-only actions).",
         )
         return ch
 
-    async def create_veteran(self, member: discord.Member) -> None:
-        v = VeteranData(member.id, {}, self.config)
-        self.veterans[member.id] = v
+    async def ensure_panel_in_channel(self, channel: discord.TextChannel, owner: discord.Member) -> None:
+        """Ensure there is a panel message with buttons in the owner’s channel."""
+        v = self.veterans.get(owner.id)
+        if not v:
+            v = VeteranData(owner.id, {}, self.config)
+            self.veterans[owner.id] = v
 
+        embed = self.build_stats_embed(owner, v)
+        view = self.build_veteran_view(owner.id)
+
+        if v.panel_message_id:
+            try:
+                msg = await channel.fetch_message(v.panel_message_id)
+            except Exception:
+                v.panel_message_id = None
+            else:
+                await msg.edit(embed=embed, view=view)
+                return
+
+        msg = await channel.send(embed=embed, view=view)
+        v.panel_message_id = msg.id
+        v.channel_id = channel.id
+        self.save_all()
+
+    async def delete_veteran_channel(self, guild: discord.Guild, user_id: int) -> None:
+        v = self.veterans.get(user_id)
+        if not v or not v.channel_id:
+            return
+        ch = guild.get_channel(v.channel_id)
+        if isinstance(ch, discord.TextChannel):
+            try:
+                await ch.delete(reason="Plant died")
+            except discord.Forbidden:
+                pass
+        v.channel_id = None
+        v.panel_message_id = None
+        self.save_all()
+
+    async def resync_guild_veterans(self, guild: discord.Guild) -> None:
+        """Scan veteran role, ensure per-veteran channels & panels; remove channels for those who lost the role."""
         role_id = self.config.get("veteran_role_id", 0)
-        if role_id:
-            role = member.guild.get_role(role_id)
-            if role:
-                try:
-                    await member.add_roles(role, reason="Registered as veteran")
-                except discord.Forbidden:
-                    pass
+        if not role_id:
+            return
+        role = guild.get_role(role_id)
+        if not role:
+            return
 
-        ch = await self.get_or_create_veteran_channel(member.guild, member)
-        if ch:
-            v.channel_id = ch.id
-            # Send panel WITH buttons
-            await ch.send(embed=self.build_stats_embed(member, v), view=self.build_veteran_view(member.id))
+        should_be = set(m.id for m in role.members)
 
+        # Ensure channels and panels for all current veterans
+        for member in role.members:
+            ch = await self.get_or_create_veteran_channel(guild, member)
+            if ch:
+                await self.ensure_panel_in_channel(ch, member)
+
+        # Remove channels for users who lost the role
+        for uid, v in list(self.veterans.items()):
+            if uid not in should_be and v.channel_id:
+                await self.delete_veteran_channel(guild, uid)
+                self.veterans.pop(uid, None)
         self.save_all()
 
     # ---------- Slash Commands & Sync ----------
@@ -353,7 +459,7 @@ class VeteranBot(commands.Bot):
         """Register slash commands, persistent views, and sync instantly to your guild."""
 
         @self.tree.command(name="configure", description="Configure bot settings (admin only)")
-        @discord.app_commands.describe(setting="Setting to change", value="New value")
+        @discord.app_commands.describe(setting="Setting to change", value="New value (IDs as integers; comma list for reward_channel_ids)")
         async def configure(inter: discord.Interaction, setting: str, value: str):
             if not (inter.user.guild_permissions.manage_guild or inter.user.guild_permissions.administrator):
                 await inter.response.send_message("You do not have permission to configure the bot.", ephemeral=True)
@@ -393,37 +499,41 @@ class VeteranBot(commands.Bot):
                 return
 
             save_json(CONFIG_FILE, self.config)
-            for v in self.veterans.values():
-                v.config = self.config
             await inter.response.send_message(f"Configuration `{key}` updated to `{value}`.", ephemeral=True)
-
-        @self.tree.command(name="register", description="Register a member as a veteran and create their channel")
-        @discord.app_commands.describe(member="Member to register")
-        async def register_member(inter: discord.Interaction, member: discord.Member):
-            if not (inter.user.guild_permissions.manage_guild or inter.user.guild_permissions.administrator):
-                await inter.response.send_message("You do not have permission to register veterans.", ephemeral=True)
-                return
-            if member.id in self.veterans:
-                await inter.response.send_message(f"{member.display_name} is already registered.", ephemeral=True)
-                return
-            await self.create_veteran(member)
-            await inter.response.send_message(f"Registered {member.display_name} as a veteran.", ephemeral=True)
 
         @self.tree.command(name="leaderboard", description="Show the veteran leaderboard")
         async def leaderboard(inter: discord.Interaction):
-            await self.send_leaderboard(inter.channel)
-            await inter.response.send_message("Leaderboard sent.", ephemeral=True)
+            # Permission sanity
+            if inter.guild and isinstance(inter.channel, discord.abc.GuildChannel):
+                perms = inter.channel.permissions_for(inter.guild.me)
+                if not perms.send_messages:
+                    await inter.response.send_message("I can't send messages in this channel.", ephemeral=True)
+                    return
+                if not perms.embed_links:
+                    await inter.response.send_message("I need the **Embed Links** permission here.", ephemeral=True)
+                    return
+            await inter.response.send_message(embed=self.build_leaderboard_embed())
 
         @self.tree.command(name="mystats", description="Show your plant stats")
         async def mystats(inter: discord.Interaction):
             v = self.veterans.get(inter.user.id)
             if not v:
-                await inter.response.send_message("You are not registered as a veteran.", ephemeral=True)
+                await inter.response.send_message("No plant data yet. If you have the Veteran role, an admin can run /resync_veterans.", ephemeral=True)
                 return
             embed = self.build_stats_embed(inter.user, v)
             await inter.response.send_message(embed=embed, view=self.build_veteran_view(inter.user.id), ephemeral=True)
 
-        # Re-register persistent views (so buttons work after restart)
+        @self.tree.command(name="resync_veterans", description="Scan the Veteran role and rebuild channels/panels (admin only)")
+        async def resync_veterans(inter: discord.Interaction):
+            if not (inter.user.guild_permissions.manage_guild or inter.user.guild_permissions.administrator):
+                await inter.response.send_message("You do not have permission.", ephemeral=True)
+                return
+            await inter.response.defer(ephemeral=True)  # <- important
+            await self.resync_guild_veterans(inter.guild)
+            await inter.followup.send("Resynced veteran channels and panels.")
+
+
+        # Re-register persistent views for all known veterans (so buttons work after restart)
         for uid in list(self.veterans.keys()):
             self.add_view(self.build_veteran_view(uid))
 
@@ -432,46 +542,74 @@ class VeteranBot(commands.Bot):
         self.tree.copy_global_to(guild=test_guild)
         await self.tree.sync(guild=test_guild)
 
-        # Start background loop AFTER loop exists
+        # Start loops after event loop exists
         if not self.degrade_task.is_running():
             self.degrade_task.start()
-
-    async def on_guild_join(self, guild: discord.Guild) -> None:
-        self.tree.copy_global_to(guild=guild)
-        await self.tree.sync(guild=guild)
+        if not self.veteran_scan_task.is_running():
+            self.veteran_scan_task.start()
 
     async def on_ready(self) -> None:
         print(f"Logged in as {self.user} (ID: {self.user.id})")
         print("------")
+        # Initial resync on boot
+        for g in self.guilds:
+            await self.resync_guild_veterans(g)
+
+    async def on_guild_join(self, guild: discord.Guild) -> None:
+        self.tree.copy_global_to(guild=guild)
+        await self.tree.sync(guild=guild)
+        await self.resync_guild_veterans(guild)
+
+    async def on_member_update(self, before: discord.Member, after: discord.Member) -> None:
+        """React to veteran role grant/removal to maintain channels automatically."""
+        role_id = self.config.get("veteran_role_id", 0)
+        if not role_id:
+            return
+        had = any(r.id == role_id for r in before.roles)
+        has = any(r.id == role_id for r in after.roles)
+        if not had and has:
+            ch = await self.get_or_create_veteran_channel(after.guild, after)
+            if ch:
+                await self.ensure_panel_in_channel(ch, after)
+        elif had and not has:
+            await self.delete_veteran_channel(after.guild, after.id)
+            self.veterans.pop(after.id, None)
+            self.save_all()
 
     # ---------- Rewards ----------
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.bot:
+        if message.author.bot or message.guild is None:
             return
         if message.channel.id not in self.config.get("reward_channel_ids", []):
             return
+
+        # Reward only veterans (by role), auto-create data if missing
+        role_id = self.config.get("veteran_role_id", 0)
+        if not role_id or not discord.utils.get(message.author.roles, id=role_id):
+            return
+
         v = self.veterans.get(message.author.id)
         if not v:
-            return
+            v = VeteranData(message.author.id, {}, self.config)
+            self.veterans[message.author.id] = v
+            # Ensure they have a channel/panel
+            ch = await self.get_or_create_veteran_channel(message.guild, message.author)
+            if ch:
+                await self.ensure_panel_in_channel(ch, message.author)
 
         t = now_ts()
         if t - v.last_message_time < self.config.get("message_cooldown_seconds", 60):
             return
-
         v.last_message_time = t
-        v.add_xp_coins(
-            self.config.get("xp_per_message", 5),
-            self.config.get("coins_per_message", 2),
-        )
+        v.add_xp_coins(self.config.get("xp_per_message", 5), self.config.get("coins_per_message", 2))
         self.save_all()
 
-    # ---------- Background Plant Degrade ----------
+    # ---------- Background Tasks ----------
     @tasks.loop(minutes=1.0)
     async def degrade_task(self) -> None:
         t = now_ts()
         interval = self.config.get("water_decrease_interval_minutes", 60) * 60
 
-        # Throttle
         if not hasattr(self.degrade_task, "last"):
             setattr(self.degrade_task, "last", t)
             return
@@ -480,13 +618,13 @@ class VeteranBot(commands.Bot):
             return
         setattr(self.degrade_task, "last", t)
 
-        # Degrade all; remove dead
         changed = False
         for uid, v in list(self.veterans.items()):
             v.degrade()
             if v.is_alive():
                 continue
 
+            # Plant died: remove role + delete channel
             for g in self.guilds:
                 member = g.get_member(uid)
                 if member:
@@ -498,19 +636,19 @@ class VeteranBot(commands.Bot):
                                 await member.remove_roles(role, reason="Plant died")
                             except discord.Forbidden:
                                 pass
-                if v.channel_id:
-                    ch = g.get_channel(v.channel_id)
-                    if isinstance(ch, discord.TextChannel):
-                        try:
-                            await ch.delete(reason="Plant died")
-                        except discord.Forbidden:
-                            pass
+                await self.delete_veteran_channel(g, uid)
 
             del self.veterans[uid]
             changed = True
 
         if changed:
             self.save_all()
+
+    @tasks.loop(minutes=5.0)
+    async def veteran_scan_task(self) -> None:
+        """Safety net: rescan veteran role to keep channels/panels in sync."""
+        for g in self.guilds:
+            await self.resync_guild_veterans(g)
 
 
 # ---------- Entrypoint ----------
