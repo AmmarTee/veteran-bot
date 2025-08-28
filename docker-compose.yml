@@ -1,0 +1,58 @@
+version: '3.9'
+
+networks:
+  web:
+    driver: bridge
+
+services:
+  reverse-proxy:
+    image: traefik:2.10
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - --certificatesresolvers.le.acme.email=${TRAEFIK_EMAIL:-admin@example.com}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+    networks:
+      - web
+
+  ui:
+    build:
+      context: ./apps/ui
+      dockerfile: Dockerfile
+    environment:
+      NEXTAUTH_URL: ${NEXTAUTH_URL}
+      DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
+      DISCORD_CLIENT_SECRET: ${DISCORD_CLIENT_SECRET}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      NEXT_PUBLIC_API_BASE_URL: ${API_BASE_URL}
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      GUILD_ID: ${GUILD_ID}
+      DISCORD_SUPERADMIN_ROLE_IDS: ${DISCORD_SUPERADMIN_ROLE_IDS}
+      DISCORD_ADMIN_ROLE_IDS: ${DISCORD_ADMIN_ROLE_IDS}
+      DISCORD_OPERATOR_ROLE_IDS: ${DISCORD_OPERATOR_ROLE_IDS}
+      DISCORD_SUPPORT_ROLE_IDS: ${DISCORD_SUPPORT_ROLE_IDS}
+      DISCORD_AUDITOR_ROLE_IDS: ${DISCORD_AUDITOR_ROLE_IDS}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ui.rule=Host(`${PANEL_HOST:-panel.example.com}`)
+      - traefik.http.routers.ui.entrypoints=websecure
+      - traefik.http.routers.ui.tls.certresolver=le
+      - traefik.http.services.ui.loadbalancer.server.port=3000
+    networks:
+      - web
+    depends_on:
+      - reverse-proxy
+
+volumes:
+  letsencrypt:
+

@@ -1,73 +1,131 @@
-# Coin Economy & Marketplace Bot (Discord.js)
+# Coin Economy & Marketplace Platform (Dockerized)
 
-This project implements a coin-based economy with an ephemeral player card, public shop with escrow, a leaderboard, and an admin transaction feed. It is designed to run alongside your other bots, with minimal setup.
+Production-ready coin economy with a Discord bot, marketplace with escrow, admin transaction feed, Web admin panel, and Minecraft integration — all running with a single Docker Compose command.
 
 ## Features
 
-- Ephemeral player card: balance, escrow, streaks
-- Coin hub message with navigation buttons
-- Public shop listings with Buy flow (escrow)
-- Admin transaction feed with event logs
-- Leaderboard channel (coins top list; placeholder wiring)
-- SQLite by default for easy deployment (swap to Postgres later)
+- Ephemeral player card (Discord) and coin hub
+- Public marketplace with escrow, pricing guards, admin overrides
+- Admin transaction feed with interactive actions and audit trail
+- Web admin panel (Next.js) with Discord OAuth2 SSO and RBAC
+- Background workers for jobs, pricing rollups, and leaderboards
+- PostgreSQL, Redis, reverse-proxy TLS, nightly backups
 
-## Requirements
+## Architecture
 
-- Node.js 18+
-- A Discord application and bot token
+ASCII overview:
 
-## Quick Start
+```
+          Internet
+              |
+        [reverse-proxy]
+          /          \
+     panel.example  api.example
+        (ui)           (api)  <-- SSE (tx.stream), REST
+          \             /
+            [cache: Redis] <--- pub/sub, rate limits, BullMQ
+                   |              \
+               [worker]           [bot]
+                   |                |
+                [db: Postgres]  [Minecraft API / Webhook]
+```
 
-1. Copy `.env.example` to `.env` and set `DISCORD_TOKEN`.
-2. Install dependencies: `npm install`
-3. (Optional) Register slash commands to a dev guild: set `APPLICATION_ID` and `TEST_GUILD_ID`, then run `npm run register`.
-4. Run the bot: `npm start`.
+Services:
+- reverse-proxy (Traefik/Nginx); ui (Next.js); api (Fastify/Express);
+  bot (Discord.js v14+); worker (BullMQ); db (Postgres); cache (Redis);
+  migrate (one-shot); backup (nightly); admin-db-ui (optional).
 
-## Environment
+## Docker Quickstart
 
-Required:
+Prereqs: Docker + Docker Compose, a Discord application (bot + OAuth2).
 
-- `DISCORD_TOKEN`: your bot token
+1. Copy `.env.example` to `.env` and set required variables (Discord, DB, Redis, URLs, secrets). In production, use Docker secrets for sensitive values.
+2. Bring up the stack: `docker compose up -d`
+   - `migrate` runs DB migrations/seed; app services wait for success.
+3. Point DNS:
+   - `panel.example.com` → reverse-proxy 443 → `ui`
+   - `api.example.com` → reverse-proxy 443 → `api`
+4. Open `https://panel.example.com` and login with Discord.
+5. Complete guild binding and role mapping in Settings.
+6. Use the panel to create channels and post the Coin Hub (or run the bot setup command).
 
-Optional:
+Health checks: UI/API expose `/healthz`; DB uses `pg_isready`; Redis uses `redis-cli ping`; bot/worker expose simple HTTP 200 or heartbeat scripts.
 
-- `DATABASE_URL`: path to SQLite file (default `./data/coins.db`)
-- `APPLICATION_ID`: your app ID (for registration script)
-- `TEST_GUILD_ID`: a guild to register commands for dev
+## Configuration
 
-## Commands
+Set via `.env` or Docker secrets. Key vars:
+- Discord: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GUILD_ID`
+- URLs: `API_BASE_URL`, `PANEL_BASE_URL`
+- Storage: `DATABASE_URL` (Postgres), `REDIS_URL`
+- Auth: `JWT_SECRET`, `SESSION_SECRET`
+- Minecraft: `MINECRAFT_API_URL`, `MINECRAFT_API_KEY`, `REDEMPTION_WEBHOOK_SECRET`
+- Economy: `MARKET_FEE`, `PRICE_FLOOR_PCT`, `ESCROW_TIMEOUT_MIN`, `VOUCHER_TIMEOUT_H`, `LEADERBOARD_CRON`
 
-- `/setupcoinsystem` (admin): creates channels and posts a pinned hub message, stores config.
+## Web Panel & Docker Quickstart
 
-## Flows
+- Prereqs:
+  - Docker Engine ≥ 24, Docker Compose v2
+  - Domains: `panel.example.com`, `api.example.com`
+- Environment setup:
+  - Copy `.env.example` → `.env`
+  - Create Docker secrets for: `DISCORD_CLIENT_SECRET`, `JWT_SECRET`, `SESSION_SECRET`, `MINECRAFT_API_KEY`
+  - Configure Discord OAuth redirect: `https://api.example.com/auth/discord/callback`
+- First run:
+  - `docker compose up -d` (runs migrations; services start after success)
+  - Visit `https://panel.example.com` → Login with Discord
+  - Complete Guild binding and Role mapping wizard
+  - From Settings or a guided action, run “Create Channels & Hub” (invokes bot)
+- Backups & restore:
+  - Nightly dumps land in `/backups`; restore with `pg_restore -d coins -h db -U app <dumpfile>`
+- Scaling:
+  - Increase workers: `docker compose up --scale worker=2 -d`
+  - Zero‑downtime deploys: roll services behind reverse‑proxy; rely on healthchecks
+- Security:
+  - TLS via reverse‑proxy, secrets via Docker secrets, firewall DB/Redis
+- Troubleshooting:
+  - OAuth redirect mismatch → check Discord app redirects
+  - Healthcheck fails → verify DB/Redis and env/secrets
+  - 429s → adjust route‑level rate limits, monitor Redis
 
-### Coin Hub
+## Usage
 
-- Buttons: My Card, Shop, Claim Daily, Help
-- My Card: ephemeral embed with wallet and escrow balances
-- Shop: ephemeral summary of active listings
-- Claim Daily: placeholder for streak/daily rewards
+Users:
+- Use the Coin Hub in Discord; interact via buttons: My Card, Shop, Quests, Claim Daily, Help.
+- All responses are ephemeral (private) — balances and purchases never post publicly.
 
-### Shop & Escrow
+Admins:
+- Operate from the Web panel: users, marketplace, rewards, events, settings.
+- Review the `#coin-transactions` channel for live TX feed and take actions (refund, fulfil, cancel, freeze, note).
 
-- Sell: button opens a modal to create a listing (SKU, quantity, unit price); posts to `#shop` channel
-- Buy: button moves coins from buyer wallet to escrow and logs an admin event
-- Fulfil/refund: to be implemented; placeholders provided in DB + admin feed
+## Screens/Examples
 
-## Database
-
-SQLite schema is created automatically on first run: tables for `users`, `config`, `listings`, `orders`, `order_lines`, and `transactions`.
-
-## Roadmap
-
-- Fulfilment commands and escrow release/refund
-- Dynamic pricing rules (floor, fee scaling, scarcity)
-- Admin controls: refund, cancel, force fulfil, freeze user
-- Leaderboard auto-update task
-- Minecraft integration hooks (voucher or API)
+- Ephemeral “My Card” embed: balance, streak, last 3 transactions.
+- Listing embed in `#shop`: seller, price, qty, Buy button; admin badges.
+- Web panel: dashboard KPIs, live TX feed (SSE), RBAC-guarded actions.
 
 ## Security
 
-- Keep your token secret. Never commit `.env`.
-- Rotate the token if it’s ever exposed.
+- TLS via reverse-proxy; httpOnly secure cookies; SameSite=strict.
+- CSRF on state-changing API routes; CORS locked to the panel origin.
+- Secrets via Docker secrets; containers run as non-root; least-privilege.
+- Webhook HMAC verification for voucher redemption; full audit trail.
 
+## Backups & Restore
+
+- Nightly `pg_dump` to `/backups` volume. Example restore:
+  - `pg_restore -d coins -h db -U app /backups/coins_YYYY-MM-DD_HHMM.dump`
+
+## Scaling
+
+- Horizontal scale on `worker` and `api`; Redis-backed queues. Deploy with zero-downtime by updating services one-by-one behind reverse-proxy.
+
+## Troubleshooting
+
+- OAuth redirect mismatch: verify Discord app redirect URIs match `PANEL_BASE_URL`.
+- Healthcheck fails: check DB/Redis connectivity and secrets.
+- 429s: tighten rate limits or adjust per-route limits; inspect Redis metrics.
+
+## Contributing & License
+
+- See `docs/IMPLEMENTATION.md` for the full spec and acceptance criteria.
+- Contributions welcome via PR with tests aligned to the Test Plan.
