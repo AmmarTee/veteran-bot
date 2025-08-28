@@ -40,6 +40,49 @@ is automatically removed.
   configured Garden channel when it comes online and when it is about
   to go offline for an update.
 
+## How To Play
+
+- Earn rewards: Chat in the configured reward channels to earn XP and coins (respects a cooldown per user).
+- Keep your plant alive: Your plant’s water slowly decreases. Use the Garden panel’s "💧 Water My Plant" to refill (costs coins).
+- Daily check-in: Press "📅 Daily Check-In" once per day to gain bonus coins/XP and build a streak.
+- Send coins: Use "💸 Send Coins" to transfer coins to another veteran (daily send limit applies).
+- Leaderboard: Check the Top-5 via the panel or use `/leaderboard` to post it in a channel.
+- Daily survival: You must send at least the configured minimum messages per local day (Asia/Karachi) in reward channels; otherwise your plant withers and the Veteran role is removed.
+
+Tips:
+- Time left: The Garden panel shows each veteran’s time left until dry and current coin balance.
+- Personal stats: Use `/mystats` for an ephemeral card with your level, coins, XP, and time left.
+
+## Admin Commands
+
+- Setup:
+  - `/setup_veteran role:<Role>`: Set the Veteran role.
+  - `/setup_garden channel:<TextChannel>`: Set the Garden panel channel.
+  - `/setup_leaderboard channel:<TextChannel>`: Set the Leaderboard panel channel.
+
+- Reward channels:
+  - `/rewards_add channel:<TextChannel>`: Add a reward channel.
+  - `/rewards_remove channel:<TextChannel>`: Remove a reward channel.
+  - `/rewards_set channels:<CSV>`: Replace all reward channels (IDs or mentions, comma-separated).
+  - `/rewards_list`: Show current reward channels.
+
+- Tuning:
+  - `/set_economy water_cost:<int> plant_max_water:<int> xp_per_message:<int> coins_per_message:<int> cooldown:<int>`
+  - `/set_degrade interval_minutes:<int> decrease_amount:<int>`
+  - `/set_limits max_send_per_day:<int> daily_min_messages:<int>`
+  - `/warnings enabled:<bool> hour:<int>`: Toggle/pick daily low-water reminder hour (local time Asia/Karachi).
+
+- Maintenance:
+  - `/seed_garden`: Create/refresh the Garden panel.
+  - `/seed_leaderboard`: Create/refresh the Leaderboard panel.
+  - `/resync_veterans`: Re-scan the Veteran role and rebuild panels.
+  - `/give_coins member:<Member> amount:<int>`: Grant coins to a member.
+  - `/revive member:<Member>`: Refill water and reset plant age for a member.
+
+- User:
+  - `/leaderboard`: Post the Top-5 leaderboard.
+  - `/mystats`: Show the caller’s personal stats (ephemeral).
+
 ## Installation
 
 1. **Clone or extract** this repository.  Inside you will find
