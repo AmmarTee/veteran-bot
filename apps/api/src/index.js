@@ -1,7 +1,9 @@
 import Fastify from 'fastify'
+import { prisma } from './db.js'
 
 const PORT = process.env.PORT || 8080
 const PANEL_ORIGIN = process.env.PANEL_BASE_URL || process.env.CORS_ORIGIN
+const DAILY_CLAIM = Number(process.env.DAILY_CLAIM || 100)
 
 const app = Fastify({ logger: true })
 
@@ -21,27 +23,129 @@ app.options('/*', async (_, reply) => {
 
 app.get('/healthz', async () => ({ ok: true }))
 
-// --- In-memory Listings API (demo) ---
-const listings = []
-let nextId = 1
-
-app.get('/listings', async () => ({ items: listings }))
-app.post('/listings', async (req, reply) => {
-  try {
-    const body = await req.body
-    const item = {
-      id: nextId++,
-      title: body?.title || 'Untitled',
-      price: Number(body?.price ?? 0),
-      created_at: new Date().toISOString(),
-    }
-    listings.push(item)
-    reply.code(201)
-    return item
-  } catch (e) {
-    reply.code(400)
-    return { error: 'Invalid payload' }
+// --- DB helpers ---
+async function ensureUser(discordId, username) {
+  const user = await prisma.user.upsert({
+    where: { discordId },
+    create: { discordId, username, wallet: { create: {} } },
+    update: { username },
+    include: { wallet: true },
+  })
+  if (!user.wallet) {
+    await prisma.wallet.create({ data: { userId: user.id } })
   }
+  return prisma.user.findUnique({ where: { discordId }, include: { wallet: true } })
+}
+
+// --- Users ---
+app.get('/users', async (req) => {
+  const limit = Math.min(Number(req.query?.limit ?? 50), 200)
+  const users = await prisma.user.findMany({
+    take: limit,
+    orderBy: { id: 'asc' },
+    include: { wallet: true },
+  })
+  return { items: users.map(u => ({
+    id: u.id,
+    discord_id: u.discordId,
+    username: u.username,
+    wallet_balance: Number(u.wallet?.walletBalance ?? 0n),
+    escrow_balance: Number(u.wallet?.escrowBalance ?? 0n),
+    frozen: u.frozen,
+    created_at: u.createdAt,
+  })) }
+})
+
+// --- Wallet endpoints ---
+app.get('/wallet/:discordId', async (req, reply) => {
+  const { discordId } = req.params
+  const user = await prisma.user.findUnique({ where: { discordId }, include: { wallet: true } })
+  if (!user) { reply.code(404); return { error: 'not_found' } }
+  return {
+    discord_id: user.discordId,
+    wallet_balance: Number(user.wallet?.walletBalance ?? 0n),
+    escrow_balance: Number(user.wallet?.escrowBalance ?? 0n),
+    last_daily_claim_at: user.lastDailyClaimAt ?? null,
+  }
+})
+
+app.post('/wallet/earn', async (req, reply) => {
+  const idem = req.headers['idempotency-key'] || req.headers['x-idempotency-key']
+  const { discord_id, amount, reason, username } = req.body || {}
+  if (!discord_id || typeof amount !== 'number') { reply.code(400); return { error: 'bad_request' } }
+  try {
+    const res = await prisma.$transaction(async (tx) => {
+      if (idem) {
+        const exists = await tx.transaction.findFirst({ where: { idemKey: String(idem) } })
+        if (exists) return { reused: true, tx: exists }
+      }
+      const user = await ensureUser(discord_id, username)
+      const before = user.wallet?.walletBalance ?? 0n
+      const after = before + BigInt(amount)
+      await tx.wallet.update({ where: { userId: user.id }, data: { walletBalance: after } })
+      const t = await tx.transaction.create({ data: {
+        type: 'earn', userId: user.id, amount: BigInt(amount), fee: 0n,
+        beforeBalance: before, afterBalance: after, meta: { reason }, idemKey: idem ? String(idem) : null,
+      }})
+      return { reused: false, tx: t }
+    })
+    reply.code(res.reused ? 200 : 201)
+    return { ok: true, tx_id: res.tx.id }
+  } catch (e) {
+    reply.code(500)
+    return { error: 'server_error' }
+  }
+})
+
+app.post('/wallet/claim', async (req, reply) => {
+  const { discord_id, username } = req.body || {}
+  if (!discord_id) { reply.code(400); return { error: 'bad_request' } }
+  const user = await ensureUser(discord_id, username)
+  const now = new Date()
+  if (user.lastDailyClaimAt) {
+    const delta = now.getTime() - new Date(user.lastDailyClaimAt).getTime()
+    if (delta < 24*60*60*1000) { reply.code(429); return { error: 'cooldown', next_at: new Date(new Date(user.lastDailyClaimAt).getTime() + 24*60*60*1000).toISOString() } }
+  }
+  try {
+    await prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({ where: { id: user.id }, data: { lastDailyClaimAt: now } })
+      const wallet = await tx.wallet.findUnique({ where: { userId: u.id } })
+      const before = wallet?.walletBalance ?? 0n
+      const after = before + BigInt(DAILY_CLAIM)
+      await tx.wallet.update({ where: { userId: u.id }, data: { walletBalance: after } })
+      await tx.transaction.create({ data: {
+        type: 'earn', userId: u.id, amount: BigInt(DAILY_CLAIM), fee: 0n,
+        beforeBalance: before, afterBalance: after, meta: { reason: 'daily_claim' }, idemKey: null,
+      }})
+    })
+    return { ok: true, amount: DAILY_CLAIM }
+  } catch (e) {
+    reply.code(500); return { error: 'server_error' }
+  }
+})
+
+// --- Listings API (DB) ---
+app.get('/listings', async () => {
+  const rows = await prisma.listing.findMany({ orderBy: { createdAt: 'desc' }, take: 100 })
+  return { items: rows.map(r => ({ id: r.id, title: r.title, price: Number(r.price), created_at: r.createdAt })) }
+})
+app.post('/listings', async (req, reply) => {
+  const body = req.body || {}
+  const title = String(body.title || 'Untitled')
+  const price = Number(body.price ?? 0)
+  const sellerDiscordId = body.discord_id || null
+  let sellerId = null
+  if (sellerDiscordId) {
+    const seller = await ensureUser(String(sellerDiscordId))
+    sellerId = seller.id
+  }
+  if (!sellerId) {
+    const sys = await ensureUser('system', 'System')
+    sellerId = sys.id
+  }
+  const rec = await prisma.listing.create({ data: { title, price: BigInt(price), qty: 1, sellerId } })
+  reply.code(201)
+  return { id: rec.id, title: rec.title, price: Number(rec.price), created_at: rec.createdAt }
 })
 
 app.get('/streams/tx', async (req, reply) => {

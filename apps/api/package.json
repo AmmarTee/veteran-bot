@@ -5,10 +5,15 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "db:push": "prisma db push",
+    "prisma:generate": "prisma generate"
   },
   "dependencies": {
+    "@prisma/client": "^5.18.0",
     "fastify": "^4.28.1"
+  },
+  "devDependencies": {
+    "prisma": "^5.18.0"
   }
 }
-

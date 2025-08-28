@@ -1,0 +1,59 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                Int       @id @default(autoincrement())
+  discordId         String    @unique
+  username          String?
+  createdAt         DateTime  @default(now())
+  frozen            Boolean   @default(false)
+  lastDailyClaimAt  DateTime?
+
+  wallet            Wallet?
+  transactions      Transaction[]
+  listings          Listing[] @relation("UserListings")
+}
+
+model Wallet {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique
+  walletBalance BigInt   @default(0)
+  escrowBalance BigInt   @default(0)
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id])
+}
+
+model Transaction {
+  id            String    @id @default(cuid())
+  type          String
+  userId        Int
+  amount        BigInt
+  fee           BigInt    @default(0)
+  beforeBalance BigInt
+  afterBalance  BigInt
+  meta          Json?
+  createdAt     DateTime  @default(now())
+  idemKey       String?   @unique
+
+  user          User      @relation(fields: [userId], references: [id])
+}
+
+model Listing {
+  id        Int      @id @default(autoincrement())
+  sellerId  Int
+  title     String
+  price     BigInt
+  qty       Int
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+
+  seller    User     @relation("UserListings", fields: [sellerId], references: [id])
+}
+
