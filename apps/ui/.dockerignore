@@ -1,0 +1,8 @@
+.next
+node_modules
+.git
+*.log
+Dockerfile
+README.md
+.DS_Store
+

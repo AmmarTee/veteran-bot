@@ -12,15 +12,6 @@ FROM node:18-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
-# Ensure optional public directory exists (avoid COPY failure later)
-RUN mkdir -p public
-# Debug: verify files and config before build
-RUN ls -la && \
-  echo "----- tsconfig.json -----" && cat tsconfig.json || true && \
-  echo "----- jsconfig.json -----" && cat jsconfig.json || true && \
-  echo "----- lib/ -----" && ls -la lib || true && \
-  echo "----- src/lib/ -----" && ls -la src/lib || true && \
-  echo "----- app/lib/ -----" && ls -la app/lib || true
 RUN npm run build
 
 FROM node:18-alpine AS runner
