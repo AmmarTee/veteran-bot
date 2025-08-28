@@ -1,28 +1,4 @@
-networks:
-  web:
-    driver: bridge
-
 services:
-  reverse-proxy:
-    image: traefik:2.10
-    command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --certificatesresolvers.le.acme.httpchallenge=true
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
-      - --certificatesresolvers.le.acme.email=${TRAEFIK_EMAIL:-admin@example.com}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-    ports:
-      - 80:80
-      - 443:443
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - letsencrypt:/letsencrypt
-    networks:
-      - web
-
   ui:
     build:
       context: ./apps/ui
@@ -40,16 +16,9 @@ services:
       DISCORD_OPERATOR_ROLE_IDS: ${DISCORD_OPERATOR_ROLE_IDS}
       DISCORD_SUPPORT_ROLE_IDS: ${DISCORD_SUPPORT_ROLE_IDS}
       DISCORD_AUDITOR_ROLE_IDS: ${DISCORD_AUDITOR_ROLE_IDS}
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.ui.rule=Host(`${PANEL_HOST:-panel.example.com}`)
-      - traefik.http.routers.ui.entrypoints=websecure
-      - traefik.http.routers.ui.tls.certresolver=le
-      - traefik.http.services.ui.loadbalancer.server.port=3000
-    networks:
-      - web
+    ports:
+      - "3000:3000"
     depends_on:
-      - reverse-proxy
       - api
 
   api:
@@ -59,16 +28,5 @@ services:
     environment:
       PORT: 8080
       PANEL_BASE_URL: ${PANEL_BASE_URL}
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.api.rule=Host(`${API_HOST:-api.example.com}`)
-      - traefik.http.routers.api.entrypoints=websecure
-      - traefik.http.routers.api.tls.certresolver=le
-      - traefik.http.services.api.loadbalancer.server.port=8080
-    networks:
-      - web
-    depends_on:
-      - reverse-proxy
-
-volumes:
-  letsencrypt:
+    ports:
+      - "8080:8080"
