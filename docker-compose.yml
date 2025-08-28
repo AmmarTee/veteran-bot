@@ -52,7 +52,25 @@ services:
       - web
     depends_on:
       - reverse-proxy
+      - api
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    environment:
+      PORT: 8080
+      PANEL_BASE_URL: ${PANEL_BASE_URL}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.api.rule=Host(`${API_HOST:-api.example.com}`)
+      - traefik.http.routers.api.entrypoints=websecure
+      - traefik.http.routers.api.tls.certresolver=le
+      - traefik.http.services.api.loadbalancer.server.port=8080
+    networks:
+      - web
+    depends_on:
+      - reverse-proxy
 
 volumes:
   letsencrypt:
-
