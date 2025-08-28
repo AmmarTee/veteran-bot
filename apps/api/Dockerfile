@@ -1,8 +1,12 @@
 # Minimal API container
 FROM node:18-bullseye-slim AS deps
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
+COPY package.json package-lock.json* yarn.lock* pnpm-lock.yaml* ./
+RUN \
+  if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f pnpm-lock.yaml ]; then npm i -g pnpm && pnpm i --frozen-lockfile; \
+  else npm i; fi
 
 FROM node:18-bullseye-slim AS builder
 WORKDIR /app
