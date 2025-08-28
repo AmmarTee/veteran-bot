@@ -57,3 +57,31 @@ model Listing {
   seller    User     @relation("UserListings", fields: [sellerId], references: [id])
 }
 
+model Order {
+  id         Int      @id @default(autoincrement())
+  listingId  Int
+  buyerId    Int
+  qty        Int
+  unitPrice  BigInt
+  fee        BigInt
+  total      BigInt
+  status     String   @default("fulfilled")
+  createdAt  DateTime @default(now())
+
+  listing    Listing  @relation(fields: [listingId], references: [id])
+  buyer      User     @relation(fields: [buyerId], references: [id])
+}
+
+model GuildConfig {
+  id                     Int      @id @default(autoincrement())
+  guildId                String   @unique
+  categoryId             String?
+  hubChannelId           String?
+  shopChannelId          String?
+  leaderboardChannelId   String?
+  questsChannelId        String?
+  announcementsChannelId String?
+  transactionsChannelId  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+}

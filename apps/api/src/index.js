@@ -4,6 +4,7 @@ import { prisma } from './db.js'
 const PORT = process.env.PORT || 8080
 const PANEL_ORIGIN = process.env.PANEL_BASE_URL || process.env.CORS_ORIGIN
 const DAILY_CLAIM = Number(process.env.DAILY_CLAIM || 100)
+const MARKET_FEE_PCT = Number(process.env.MARKET_FEE || 0.08)
 
 const app = Fastify({ logger: true })
 
@@ -146,6 +147,89 @@ app.post('/listings', async (req, reply) => {
   const rec = await prisma.listing.create({ data: { title, price: BigInt(price), qty: 1, sellerId } })
   reply.code(201)
   return { id: rec.id, title: rec.title, price: Number(rec.price), created_at: rec.createdAt }
+})
+
+// --- Orders (simple immediate fulfil) ---
+app.post('/orders', async (req, reply) => {
+  const { listing_id, qty = 1, buyer_discord_id, username } = req.body || {}
+  if (!listing_id || !buyer_discord_id) { reply.code(400); return { error: 'bad_request' } }
+  const quantity = Math.max(1, Number(qty))
+  try {
+    const res = await prisma.$transaction(async (tx) => {
+      const listing = await tx.listing.findUnique({ where: { id: Number(listing_id) } })
+      if (!listing || listing.status !== 'active') throw new Error('listing_unavailable')
+      if (listing.qty < quantity) throw new Error('insufficient_qty')
+
+      const buyer = await ensureUser(String(buyer_discord_id), username)
+      const seller = await tx.user.findUnique({ where: { id: listing.sellerId }, include: { wallet: true } })
+      if (!seller) throw new Error('seller_missing')
+
+      const unit = listing.price
+      const total = unit * BigInt(quantity)
+      const feePct = Math.round(MARKET_FEE_PCT * 100) // percent * 100
+      const fee = (total * BigInt(feePct)) / 100n
+      const sellerProceeds = total - fee
+
+      const buyerWallet = await tx.wallet.findUnique({ where: { userId: buyer.id } })
+      const buyerBefore = buyerWallet?.walletBalance ?? 0n
+      if (buyerBefore < total) throw new Error('insufficient_funds')
+      const buyerAfter = buyerBefore - total
+      await tx.wallet.update({ where: { userId: buyer.id }, data: { walletBalance: buyerAfter } })
+      await tx.transaction.create({ data: {
+        type: 'spend', userId: buyer.id, amount: total, fee: 0n,
+        beforeBalance: buyerBefore, afterBalance: buyerAfter, meta: { reason: 'buy', listing_id, qty: quantity }, idemKey: null,
+      }})
+
+      const sellerWallet = await tx.wallet.findUnique({ where: { userId: seller.id } })
+      const sellerBefore = sellerWallet?.walletBalance ?? 0n
+      const sellerAfter = sellerBefore + sellerProceeds
+      await tx.wallet.update({ where: { userId: seller.id }, data: { walletBalance: sellerAfter } })
+      await tx.transaction.create({ data: {
+        type: 'earn', userId: seller.id, amount: sellerProceeds, fee: fee,
+        beforeBalance: sellerBefore, afterBalance: sellerAfter, meta: { reason: 'sell', listing_id, qty: quantity }, idemKey: null,
+      }})
+
+      const newQty = listing.qty - quantity
+      await tx.listing.update({ where: { id: listing.id }, data: { qty: newQty, status: newQty <= 0 ? 'sold' : 'active' } })
+
+      const order = await tx.order.create({ data: {
+        listingId: listing.id,
+        buyerId: buyer.id,
+        qty: quantity,
+        unitPrice: unit,
+        fee,
+        total,
+        status: 'fulfilled',
+      }})
+      return { order, total, fee, proceeds: sellerProceeds }
+    })
+    reply.code(201)
+    return { ok: true, order_id: res.order.id, total: Number(res.total), fee: Number(res.fee) }
+  } catch (e) {
+    const msg = (e && e.message) || 'server_error'
+    const map = { listing_unavailable: 409, insufficient_qty: 409, insufficient_funds: 402 }
+    reply.code(map[msg] || 500)
+    return { error: msg }
+  }
+})
+
+// --- Guild Config ---
+app.get('/config/:guildId', async (req, reply) => {
+  const { guildId } = req.params
+  const cfg = await prisma.guildConfig.findUnique({ where: { guildId } })
+  if (!cfg) { reply.code(404); return { error: 'not_found' } }
+  return cfg
+})
+
+app.put('/config/:guildId', async (req) => {
+  const { guildId } = req.params
+  const data = req.body || {}
+  const cfg = await prisma.guildConfig.upsert({
+    where: { guildId },
+    create: { guildId, ...data },
+    update: { ...data },
+  })
+  return cfg
 })
 
 app.get('/streams/tx', async (req, reply) => {

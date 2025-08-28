@@ -1,131 +1,143 @@
-# Coin Economy & Marketplace Platform (Dockerized)
+# Legocraft Coin Economy — For Humans (Docker 1‑click)
 
-Production-ready coin economy with a Discord bot, marketplace with escrow, admin transaction feed, Web admin panel, and Minecraft integration — all running with a single Docker Compose command.
+A friendly, everything‑in‑one stack:
+- Web panel (Next.js)
+- API (Fastify + Postgres via Prisma)
+- Discord bot (discord.js)
 
-## Features
+Use it to run a coin economy in your Discord server, list items on a marketplace, and (optionally) connect to Minecraft.
 
-- Ephemeral player card (Discord) and coin hub
-- Public marketplace with escrow, pricing guards, admin overrides
-- Admin transaction feed with interactive actions and audit trail
-- Web admin panel (Next.js) with Discord OAuth2 SSO and RBAC
-- Background workers for jobs, pricing rollups, and leaderboards
-- PostgreSQL, Redis, reverse-proxy TLS, nightly backups
+## Quick Start (5 minutes)
 
-## Architecture
+Prerequisites
+- Docker + Docker Compose
+- Discord Developer Portal access
 
-ASCII overview:
+1) Clone and set env
+- Copy `.env.example` → `.env`
+- Fill these first:
+  - `DISCORD_TOKEN` (Bot token)
+  - `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`
+  - `GUILD_ID` (your Discord server ID)
+  - `MAIN_CHANNEL_ID` (channel to post “bot is online”)
+  - `NEXTAUTH_URL` = your panel URL, e.g. `https://duckpanel.trostrum.com`
+  - `NEXTAUTH_SECRET` = random string (64+ chars)
+  - `PANEL_BASE_URL=https://duckpanel.trostrum.com`
+  - `API_BASE_URL=https://duckapi.trostrum.com`
 
-```
-          Internet
-              |
-        [reverse-proxy]
-          /          \
-     panel.example  api.example
-        (ui)           (api)  <-- SSE (tx.stream), REST
-          \             /
-            [cache: Redis] <--- pub/sub, rate limits, BullMQ
-                   |              \
-               [worker]           [bot]
-                   |                |
-                [db: Postgres]  [Minecraft API / Webhook]
-```
+2) Discord app setup (once)
+- Create app → add a Bot → copy the token.
+- Enable “Server Members” and “Message Content” intents.
+- OAuth2 → URL Generator:
+  - Scopes: `bot`, `applications.commands`
+  - Permissions: Send Messages, Read Message History, Embed Links
+- Invite the bot with the generated URL.
+- Add OAuth Redirect URI: `https://duckpanel.trostrum.com/api/auth/callback/discord`
 
-Services:
-- reverse-proxy (Traefik/Nginx); ui (Next.js); api (Fastify/Express);
-  bot (Discord.js v14+); worker (BullMQ); db (Postgres); cache (Redis);
-  migrate (one-shot); backup (nightly); admin-db-ui (optional).
+3) Run it
+- `docker compose build --no-cache && docker compose up -d`
+- Check health:
+  - UI: `http://localhost:3000/healthz` ⇒ 200
+  - API: `http://localhost:8080/healthz` ⇒ 200
+- The bot posts “✅ Bot is online and ready!” in `MAIN_CHANNEL_ID`.
 
-## Docker Quickstart
+4) Open the panel
+- Visit `https://duckpanel.trostrum.com`
+- Login with Discord
+- Use the top nav: Users, Listings, Orders, Rewards, Quests, Events, Reports, Settings
 
-Prereqs: Docker + Docker Compose, a Discord application (bot + OAuth2).
+Tip: If running behind Cloudflare, keep the compose ports (`3000`, `8080`) open locally and map your DNS records to the host. `NEXTAUTH_URL` must match your public panel hostname.
 
-1. Copy `.env.example` to `.env` and set required variables (Discord, DB, Redis, URLs, secrets). In production, use Docker secrets for sensitive values.
-2. Bring up the stack: `docker compose up -d`
-   - `migrate` runs DB migrations/seed; app services wait for success.
-3. Point DNS:
-   - `panel.example.com` → reverse-proxy 443 → `ui`
-   - `api.example.com` → reverse-proxy 443 → `api`
-4. Open `https://panel.example.com` and login with Discord.
-5. Complete guild binding and role mapping in Settings.
-6. Use the panel to create channels and post the Coin Hub (or run the bot setup command).
+## What’s Included
 
-Health checks: UI/API expose `/healthz`; DB uses `pg_isready`; Redis uses `redis-cli ping`; bot/worker expose simple HTTP 200 or heartbeat scripts.
+- UI (Next.js 14)
+  - Discord login with NextAuth
+  - Protected routes via route group `(protected)`
+  - Pages: Users (lists users), Marketplace → Listings (add items), Orders/Rewards/Quests/Events/Reports/Settings (stubs you can extend)
+- API (Fastify)
+  - `GET /users`: list users with balances
+  - `GET /wallet/:discordId`: wallet + escrow
+  - `POST /wallet/earn`: add coins (supports `Idempotency-Key`)
+  - `POST /wallet/claim`: daily claim with 24h cooldown (`DAILY_CLAIM`)
+  - `GET/POST /listings`: DB‑backed listings
+  - `GET /healthz`: healthcheck
+  - `GET /streams/tx`: sample SSE (keep‑alive)
+- Bot (discord.js v14)
+  - Auto‑registers guild slash commands: `/ping`, `/card`, `/claim`
+  - Announces online in `MAIN_CHANNEL_ID`
+  - Talks to the API (uses `API_BASE_URL` inside compose)
+- Data
+  - Postgres + Prisma schema for users, wallets, transactions, listings
+  - Redis (future rate limits, queues)
 
-## Configuration
+## File Layout
 
-Set via `.env` or Docker secrets. Key vars:
-- Discord: `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GUILD_ID`
-- URLs: `API_BASE_URL`, `PANEL_BASE_URL`
-- Storage: `DATABASE_URL` (Postgres), `REDIS_URL`
-- Auth: `JWT_SECRET`, `SESSION_SECRET`
-- Minecraft: `MINECRAFT_API_URL`, `MINECRAFT_API_KEY`, `REDEMPTION_WEBHOOK_SECRET`
-- Economy: `MARKET_FEE`, `PRICE_FLOOR_PCT`, `ESCROW_TIMEOUT_MIN`, `VOUCHER_TIMEOUT_H`, `LEADERBOARD_CRON`
+- `apps/ui` — Next.js panel
+- `apps/api` — Fastify API + Prisma
+- `apps/bot` — Discord bot
+- `docker-compose.yml` — runs db, cache, api, bot, ui
+- `.env.example` — all environment variables you can set
 
-## Web Panel & Docker Quickstart
+## Environment Variables (most important)
 
-- Prereqs:
-  - Docker Engine ≥ 24, Docker Compose v2
-  - Domains: `panel.example.com`, `api.example.com`
-- Environment setup:
-  - Copy `.env.example` → `.env`
-  - Create Docker secrets for: `DISCORD_CLIENT_SECRET`, `JWT_SECRET`, `SESSION_SECRET`, `MINECRAFT_API_KEY`
-  - Configure Discord OAuth redirect: `https://api.example.com/auth/discord/callback`
-- First run:
-  - `docker compose up -d` (runs migrations; services start after success)
-  - Visit `https://panel.example.com` → Login with Discord
-  - Complete Guild binding and Role mapping wizard
-  - From Settings or a guided action, run “Create Channels & Hub” (invokes bot)
-- Backups & restore:
-  - Nightly dumps land in `/backups`; restore with `pg_restore -d coins -h db -U app <dumpfile>`
-- Scaling:
-  - Increase workers: `docker compose up --scale worker=2 -d`
-  - Zero‑downtime deploys: roll services behind reverse‑proxy; rely on healthchecks
-- Security:
-  - TLS via reverse‑proxy, secrets via Docker secrets, firewall DB/Redis
-- Troubleshooting:
-  - OAuth redirect mismatch → check Discord app redirects
-  - Healthcheck fails → verify DB/Redis and env/secrets
-  - 429s → adjust route‑level rate limits, monitor Redis
+- Discord
+  - `DISCORD_TOKEN`, `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET`, `GUILD_ID`, `MAIN_CHANNEL_ID`
+- URLs
+  - `PANEL_BASE_URL` (public panel URL)
+  - `API_BASE_URL` (public API URL)
+  - `NEXTAUTH_URL` (must equal public panel URL)
+- Database / Cache
+  - `DATABASE_URL` (compose defaults work out of the box)
+  - `REDIS_URL` (compose defaults work out of the box)
+- Auth
+  - `NEXTAUTH_SECRET` (generate a long random string)
+- Economy
+  - `DAILY_CLAIM` (default 100)
 
-## Usage
+Note: Inside Docker, services talk over the internal network. The UI gets both the public `NEXT_PUBLIC_API_BASE_URL` (from your `.env`) and an internal `API_BASE_URL=http://api:8080` for server‑side calls.
 
-Users:
-- Use the Coin Hub in Discord; interact via buttons: My Card, Shop, Quests, Claim Daily, Help.
-- All responses are ephemeral (private) — balances and purchases never post publicly.
+## Common Tasks
 
-Admins:
-- Operate from the Web panel: users, marketplace, rewards, events, settings.
-- Review the `#coin-transactions` channel for live TX feed and take actions (refund, fulfil, cancel, freeze, note).
+- Rebuild everything
+  - `docker compose build --no-cache && docker compose up -d`
+- View logs
+  - `docker compose logs -f api`
+  - `docker compose logs -f ui`
+  - `docker compose logs -f bot`
+- Test bot commands in your server
+  - `/ping` → Pong + latency
+  - `/card` → Shows your wallet
+  - `/claim` → Daily coins (24h cooldown)
+- Use the panel
+  - Listings: create items (stored in Postgres)
+  - Users: see users as they appear (created on first API interaction)
 
-## Screens/Examples
+## Troubleshooting (read me first)
 
-- Ephemeral “My Card” embed: balance, streak, last 3 transactions.
-- Listing embed in `#shop`: seller, price, qty, Buy button; admin badges.
-- Web panel: dashboard KPIs, live TX feed (SSE), RBAC-guarded actions.
+- “405 on /api/auth/providers”
+  - Ensure the NextAuth route is wired (it is) and `NEXTAUTH_URL` matches your panel hostname.
+- “Bot didn’t post”
+  - Check the bot has permission in `MAIN_CHANNEL_ID` and the ID is correct. See logs.
+- “Login fails / callback mismatch”
+  - Discord OAuth Redirect must be exactly `https://YOUR_PANEL/api/auth/callback/discord` and match `NEXTAUTH_URL`.
+- UI 404s on pages
+  - We shipped stubs for all top‑nav pages; rebuild if you don’t see them.
+- Can’t reach services publicly
+  - If using Cloudflare, point DNS to your host and use “Full” SSL. Compose still serves HTTP on `3000` and `8080` internally.
 
-## Security
+## Roadmap (what’s next)
 
-- TLS via reverse-proxy; httpOnly secure cookies; SameSite=strict.
-- CSRF on state-changing API routes; CORS locked to the panel origin.
-- Secrets via Docker secrets; containers run as non-root; least-privilege.
-- Webhook HMAC verification for voucher redemption; full audit trail.
+- Escrow and orders (list → buy → fulfil/refund) with fees & floors
+- Admin transaction feed channel with actionable embeds
+- Rewards catalog (ranks, cosmetics), quests/trivia
+- Worker for expiries, retries, price windows, leaderboards
+- Minecraft fulfilment (direct API + voucher mode)
 
-## Backups & Restore
+## Safety & Secrets
 
-- Nightly `pg_dump` to `/backups` volume. Example restore:
-  - `pg_restore -d coins -h db -U app /backups/coins_YYYY-MM-DD_HHMM.dump`
+- Never commit real secrets. Use `.env` for local, Docker secrets for prod.
+- Keep your Discord Bot token private. Rotate if leaked.
+- The containers run as non‑root where possible.
 
-## Scaling
+Happy building! If you want help wiring the next feature (escrow or admin feed), open an issue or ask for a PR plan.
 
-- Horizontal scale on `worker` and `api`; Redis-backed queues. Deploy with zero-downtime by updating services one-by-one behind reverse-proxy.
-
-## Troubleshooting
-
-- OAuth redirect mismatch: verify Discord app redirect URIs match `PANEL_BASE_URL`.
-- Healthcheck fails: check DB/Redis connectivity and secrets.
-- 429s: tighten rate limits or adjust per-route limits; inspect Redis metrics.
-
-## Contributing & License
-
-- See `docs/IMPLEMENTATION.md` for the full spec and acceptance criteria.
-- Contributions welcome via PR with tests aligned to the Test Plan.
