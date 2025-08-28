@@ -32,6 +32,8 @@ services:
       DISCORD_CLIENT_ID: ${DISCORD_CLIENT_ID}
       API_BASE_URL: http://api:8080
     restart: unless-stopped
+    depends_on:
+      - api
   ui:
     build:
       context: ./apps/ui

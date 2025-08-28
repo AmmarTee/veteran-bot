@@ -9,7 +9,7 @@ RUN \
   else npm i; fi
 COPY . .
 ENV NODE_ENV=production
-RUN npx prisma generate
+RUN apk add --no-cache openssl1.1-compat libc6-compat && npx prisma generate
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://localhost:8080/healthz >/dev/null || exit 1
 CMD ["sh", "-c", "npx prisma db push && node src/index.js"]

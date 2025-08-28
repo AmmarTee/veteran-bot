@@ -75,10 +75,15 @@ async function getConfig() {
 
 async function saveConfig(partial) {
   if (!guildId) return null
-  const res = await fetch(`${apiBase}/config/${guildId}`, {
-    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(partial)
-  })
-  return res.json()
+  try {
+    const res = await fetch(`${apiBase}/config/${guildId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(partial)
+    })
+    if (!res.ok) return null
+    return await res.json()
+  } catch {
+    return null
+  }
 }
 
 async function ensureEconomyChannels(interaction) {
@@ -151,6 +156,7 @@ async function postTxEmbed(type, fields = []) {
 }
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return
+  try {
   if (interaction.commandName === 'ping') {
     const t = Date.now()
     await interaction.reply({ content: 'Pong!', ephemeral: true })
@@ -216,6 +222,9 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (ch?.isTextBased()) await ch.send({ embeds: [ new EmbedBuilder().setTitle('Top 10 Balances').setDescription(lines).setColor(0xf59e0b) ] })
     await interaction.editReply('Leaderboard refreshed.')
     return
+  }
+  } catch (e) {
+    try { await interaction.reply({ ephemeral: true, content: 'Something went wrong processing your command.' }) } catch {}
   }
 })
 
