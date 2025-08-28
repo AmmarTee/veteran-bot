@@ -1,4 +1,13 @@
 services:
+  bot:
+    build:
+      context: ./apps/bot
+      dockerfile: Dockerfile
+    environment:
+      DISCORD_TOKEN: ${DISCORD_TOKEN}
+      GUILD_ID: ${GUILD_ID}
+      MAIN_CHANNEL_ID: ${MAIN_CHANNEL_ID}
+    restart: unless-stopped
   ui:
     build:
       context: ./apps/ui
@@ -20,6 +29,7 @@ services:
       - "3000:3000"
     depends_on:
       - api
+      - bot
 
   api:
     build:

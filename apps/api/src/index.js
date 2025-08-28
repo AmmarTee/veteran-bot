@@ -21,6 +21,29 @@ app.options('/*', async (_, reply) => {
 
 app.get('/healthz', async () => ({ ok: true }))
 
+// --- In-memory Listings API (demo) ---
+const listings = []
+let nextId = 1
+
+app.get('/listings', async () => ({ items: listings }))
+app.post('/listings', async (req, reply) => {
+  try {
+    const body = await req.body
+    const item = {
+      id: nextId++,
+      title: body?.title || 'Untitled',
+      price: Number(body?.price ?? 0),
+      created_at: new Date().toISOString(),
+    }
+    listings.push(item)
+    reply.code(201)
+    return item
+  } catch (e) {
+    reply.code(400)
+    return { error: 'Invalid payload' }
+  }
+})
+
 app.get('/streams/tx', async (req, reply) => {
   reply
     .header('Content-Type', 'text/event-stream')
@@ -41,4 +64,3 @@ app.get('/streams/tx', async (req, reply) => {
 app.listen({ host: '0.0.0.0', port: PORT })
   .then(() => app.log.info(`API listening on :${PORT}`))
   .catch((err) => { app.log.error(err); process.exit(1) })
-
