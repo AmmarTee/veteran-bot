@@ -31,6 +31,15 @@ is automatically removed.
   veterans or update configuration parameters (such as which channels
   to watch for rewards, water costs, etc.) using slash commands.
 
+## Deployment niceties
+
+* **Auto command sync on deploy:** On startup the bot now syncs slash
+  commands to all joined guilds, so new/changed commands are available
+  immediately after you push and restart.
+* **Status announcements:** The bot posts a status message in the
+  configured Garden channel when it comes online and when it is about
+  to go offline for an update.
+
 ## Installation
 
 1. **Clone or extract** this repository.  Inside you will find
