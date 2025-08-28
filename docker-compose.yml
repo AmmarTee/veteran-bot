@@ -33,7 +33,8 @@ services:
       API_BASE_URL: http://api:8080
     restart: unless-stopped
     depends_on:
-      - api
+      api:
+        condition: service_healthy
   ui:
     build:
       context: ./apps/ui
@@ -55,8 +56,10 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - api
-      - bot
+      api:
+        condition: service_healthy
+      bot:
+        condition: service_started
 
   api:
     build:
