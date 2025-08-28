@@ -1,1 +1,1 @@
-{"/_not-found/page":"/_not-found","/healthz/route":"/healthz","/api/auth/[...nextauth]/route":"/api/auth/[...nextauth]","/login/page":"/login","/(protected)/page":"/","/(protected)/users/page":"/users"}
+{"/_not-found/page":"/_not-found","/api/auth/[...nextauth]/route":"/api/auth/[...nextauth]","/healthz/route":"/healthz","/login/page":"/login","/(protected)/page":"/","/(protected)/users/page":"/users"}
