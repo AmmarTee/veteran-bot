@@ -2,7 +2,7 @@
 const nextConfig = {
   reactStrictMode: true,
   experimental: {
-    typedRoutes: true,
+    typedRoutes: false,
   },
   headers: async () => [
     {
@@ -17,4 +17,3 @@ const nextConfig = {
 };
 
 export default nextConfig;
-
