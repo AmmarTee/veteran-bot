@@ -9,7 +9,6 @@ RUN \
   else npm i; fi
 COPY . .
 ENV NODE_ENV=production
-RUN apk add --no-cache curl
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD curl -fsS http://localhost:8080/healthz || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://localhost:8080/healthz >/dev/null || exit 1
 CMD ["npm", "start"]
