@@ -1,4 +1,4 @@
-import LiveFeed from '@/components/LiveFeed'
+import LiveFeed from '../../components/LiveFeed'
 
 export default function Dashboard() {
   return (
@@ -22,4 +22,3 @@ export default function Dashboard() {
     </main>
   )
 }
-
