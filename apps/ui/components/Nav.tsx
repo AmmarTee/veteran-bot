@@ -5,11 +5,7 @@ export default function Nav() {
     { href: '/', label: 'Dashboard' },
     { href: '/users', label: 'Users' },
     { href: '/marketplace/listings', label: 'Listings' },
-    { href: '/marketplace/orders', label: 'Orders' },
-    { href: '/rewards', label: 'Rewards' },
     { href: '/quests', label: 'Quests' },
-    { href: '/events', label: 'Events' },
-    { href: '/reports', label: 'Reports' },
     { href: '/settings', label: 'Settings' }
   ]
   return (
