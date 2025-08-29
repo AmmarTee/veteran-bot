@@ -108,18 +108,19 @@ app.post('/wallet/claim', async (req, reply) => {
     if (delta < 24*60*60*1000) { reply.code(429); return { error: 'cooldown', next_at: new Date(new Date(user.lastDailyClaimAt).getTime() + 24*60*60*1000).toISOString() } }
   }
   try {
+    let after = 0n
     await prisma.$transaction(async (tx) => {
       const u = await tx.user.update({ where: { id: user.id }, data: { lastDailyClaimAt: now } })
       const wallet = await tx.wallet.findUnique({ where: { userId: u.id } })
       const before = wallet?.walletBalance ?? 0n
-      const after = before + BigInt(DAILY_CLAIM)
+      after = before + BigInt(DAILY_CLAIM)
       await tx.wallet.update({ where: { userId: u.id }, data: { walletBalance: after } })
       await tx.transaction.create({ data: {
         type: 'earn', userId: u.id, amount: BigInt(DAILY_CLAIM), fee: 0n,
         beforeBalance: before, afterBalance: after, meta: { reason: 'daily_claim' }, idemKey: null,
       }})
     })
-    return { ok: true, amount: DAILY_CLAIM }
+    return { ok: true, amount: DAILY_CLAIM, balance: Number(after) }
   } catch (e) {
     reply.code(500); return { error: 'server_error' }
   }
@@ -230,6 +231,64 @@ app.put('/config/:guildId', async (req) => {
     update: { ...data },
   })
   return cfg
+})
+
+// --- Quests ---
+app.get('/quests/:guildId', async (req) => {
+  const { guildId } = req.params
+  const rows = await prisma.quest.findMany({ where: { guildId }, orderBy: { createdAt: 'asc' } })
+  return rows.map(q => ({ id: q.id, title: q.title, description: q.description, reward: Number(q.reward) }))
+})
+
+app.post('/quests/:guildId', async (req, reply) => {
+  const { guildId } = req.params
+  const { title, description = null, reward } = req.body || {}
+  if (!title || typeof reward !== 'number') { reply.code(400); return { error: 'bad_request' } }
+  const rec = await prisma.quest.create({ data: { guildId, title, description, reward: BigInt(reward) } })
+  const cfg = await prisma.guildConfig.findUnique({ where: { guildId } })
+  const token = process.env.DISCORD_TOKEN
+  if (token && cfg?.questsChannelId) {
+    const content = `New quest: **${title}** — ${reward} coins`
+    fetch(`https://discord.com/api/v10/channels/${cfg.questsChannelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bot ${token}` },
+      body: JSON.stringify({ content }),
+    }).catch(()=>{})
+  }
+  reply.code(201)
+  return { id: rec.id, title: rec.title, description: rec.description, reward: Number(rec.reward) }
+})
+
+app.post('/admin/message', async (req, reply) => {
+  const { channel_id, content } = req.body || {}
+  const token = process.env.DISCORD_TOKEN
+  if (!token) {
+    reply.code(500)
+    return { error: 'missing_token' }
+  }
+  if (!channel_id || !content) {
+    reply.code(400)
+    return { error: 'bad_request' }
+  }
+  try {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channel_id}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bot ${token}`,
+      },
+      body: JSON.stringify({ content })
+    })
+    if (!res.ok) {
+      reply.code(500)
+      return { error: 'discord_error' }
+    }
+    const msg = await res.json()
+    return { ok: true, message_id: msg.id }
+  } catch (e) {
+    reply.code(500)
+    return { error: 'server_error' }
+  }
 })
 
 app.get('/streams/tx', async (req, reply) => {
