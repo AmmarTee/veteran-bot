@@ -232,6 +232,38 @@ app.put('/config/:guildId', async (req) => {
   return cfg
 })
 
+app.post('/admin/message', async (req, reply) => {
+  const { channel_id, content } = req.body || {}
+  const token = process.env.DISCORD_TOKEN
+  if (!token) {
+    reply.code(500)
+    return { error: 'missing_token' }
+  }
+  if (!channel_id || !content) {
+    reply.code(400)
+    return { error: 'bad_request' }
+  }
+  try {
+    const res = await fetch(`https://discord.com/api/v10/channels/${channel_id}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bot ${token}`,
+      },
+      body: JSON.stringify({ content })
+    })
+    if (!res.ok) {
+      reply.code(500)
+      return { error: 'discord_error' }
+    }
+    const msg = await res.json()
+    return { ok: true, message_id: msg.id }
+  } catch (e) {
+    reply.code(500)
+    return { error: 'server_error' }
+  }
+})
+
 app.get('/streams/tx', async (req, reply) => {
   reply
     .header('Content-Type', 'text/event-stream')
