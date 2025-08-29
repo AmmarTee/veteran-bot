@@ -232,15 +232,36 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return
   try {
     if (interaction.customId === 'hub:help') {
-      return interaction.reply({ ephemeral: true, content: 'Earn coins via daily claim, quests, and trades. Use Shop to buy/sell. All purchases are private.' })
+      const embed = new EmbedBuilder()
+        .setTitle('How the Economy Works')
+        .setDescription('Earn coins by claiming daily rewards, completing quests and trading with others.')
+        .addFields(
+          { name: 'Daily Claim', value: 'Use **Claim Daily** once every 24h for free coins.' },
+          { name: 'Quests', value: 'Visit the quests channel for extra rewards.' },
+          { name: 'Shop', value: 'Buy or sell items anonymously in the marketplace.' },
+          { name: 'Trades', value: 'All purchases are handled privately via DM.' },
+        )
+        .setColor(0x3b82f6)
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('hub:card').setStyle(ButtonStyle.Primary).setLabel('My Card'),
+        new ButtonBuilder().setCustomId('hub:shop').setStyle(ButtonStyle.Secondary).setLabel('Shop'),
+        new ButtonBuilder().setCustomId('hub:quests').setStyle(ButtonStyle.Secondary).setLabel('Quests'),
+        new ButtonBuilder().setCustomId('hub:claim').setStyle(ButtonStyle.Success).setLabel('Claim Daily'),
+      )
+      return interaction.reply({ ephemeral: true, embeds: [embed], components: [row] })
     }
     if (interaction.customId === 'hub:card') {
       const res = await fetch(`${apiBase}/wallet/${interaction.user.id}`).then(r=>r.json()).catch(()=>null)
       if (!res || res.error) return interaction.reply({ ephemeral: true, content: 'Could not load wallet.' })
-      const embed = new EmbedBuilder().setTitle('Your Card').addFields(
-        { name: 'Balance', value: String(res.wallet_balance), inline: true },
-        { name: 'Escrow', value: String(res.escrow_balance), inline: true },
-      ).setColor(0x0ea5e9)
+      const embed = new EmbedBuilder()
+        .setTitle('Your Card')
+        .setDescription('Wallet summary')
+        .addFields(
+          { name: 'Balance', value: String(res.wallet_balance), inline: true },
+          { name: 'Escrow', value: String(res.escrow_balance), inline: true },
+        )
+        .setThumbnail(interaction.user.displayAvatarURL())
+        .setColor(0x0ea5e9)
       return interaction.reply({ ephemeral: true, embeds: [embed] })
     }
     if (interaction.customId === 'hub:claim') {
@@ -249,7 +270,14 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (res.error === 'cooldown') return interaction.reply({ ephemeral: true, content: `Already claimed. Next at ${res.next_at}` })
       if (res.ok) {
         await postTxEmbed('earn', [ { name: 'User', value: `<@${interaction.user.id}>` }, { name: 'Reason', value: 'daily_claim' }, { name: 'Amount', value: String(res.amount) } ])
-        return interaction.reply({ ephemeral: true, content: `You received ${res.amount} coins!` })
+        const embed = new EmbedBuilder()
+          .setTitle('Daily Reward')
+          .setDescription(`You received **${res.amount}** coins!`)
+          .setColor(0x22c55e)
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId('hub:card').setStyle(ButtonStyle.Primary).setLabel('View Card'),
+        )
+        return interaction.reply({ ephemeral: true, embeds: [embed], components: [row] })
       }
       return interaction.reply({ ephemeral: true, content: 'Could not claim now.' })
     }
@@ -274,7 +302,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       if (!res) return interaction.reply({ ephemeral: true, content: 'Error contacting API.' })
       if (res.error) return interaction.reply({ ephemeral: true, content: `Purchase failed: ${res.error}` })
       await postTxEmbed('buy', [ { name: 'Buyer', value: `<@${interaction.user.id}>` }, { name: 'Order', value: String(res.order_id) }, { name: 'Total', value: String(res.total) } ])
-      return interaction.reply({ ephemeral: true, content: `Purchased! Order #${res.order_id} — Total ${res.total}` })
+      const embed = new EmbedBuilder()
+        .setTitle('Purchase Complete')
+        .addFields(
+          { name: 'Order', value: `#${res.order_id}`, inline: true },
+          { name: 'Total', value: String(res.total), inline: true },
+        )
+        .setColor(0x22c55e)
+      const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('hub:card').setStyle(ButtonStyle.Primary).setLabel('View Card'),
+      )
+      return interaction.reply({ ephemeral: true, embeds: [embed], components: [row] })
     }
   } catch (e) {
     return interaction.reply({ ephemeral: true, content: 'Something went wrong.' }).catch(()=>{})
