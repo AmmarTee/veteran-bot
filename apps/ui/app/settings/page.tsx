@@ -52,11 +52,9 @@ export default function SettingsPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-xl font-semibold">Settings</h1>
-      </div>
+      <h1 className="text-xl font-semibold">Settings</h1>
 
-      <form onSubmit={save} className="space-y-2 max-w-md">
+      <form onSubmit={save} className="space-y-4 max-w-md bg-white p-4 rounded shadow">
         <h2 className="font-medium">Announcements</h2>
         <label className="flex flex-col text-sm">
           <span className="text-gray-600">Channel ID</span>
@@ -69,7 +67,7 @@ export default function SettingsPage() {
         <button type="submit" className="bg-black text-white text-sm px-3 py-2 rounded">Save</button>
       </form>
 
-      <form onSubmit={sendMessage} className="space-y-2 max-w-md">
+      <form onSubmit={sendMessage} className="space-y-4 max-w-md bg-white p-4 rounded shadow">
         <h2 className="font-medium">Post Message</h2>
         <label className="flex flex-col text-sm">
           <span className="text-gray-600">Channel ID</span>

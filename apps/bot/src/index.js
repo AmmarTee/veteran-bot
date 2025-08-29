@@ -33,6 +33,7 @@ client.once(Events.ClientReady, async () => {
         new SlashCommandBuilder().setName('setup_economy').setDescription('Create Coin Economy category & channels'),
         new SlashCommandBuilder().setName('seed_market').setDescription('Seed marketplace with starter listings'),
         new SlashCommandBuilder().setName('leaderboard_refresh').setDescription('Refresh the leaderboard message'),
+        new SlashCommandBuilder().setName('milestones_channel').setDescription('Set channel for coin milestone messages').addChannelOption(o=>o.setName('channel').setDescription('Channel').setRequired(true)),
       ].map(c => c.toJSON())
       const rest = new REST({ version: '10' }).setToken(token)
       await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands })
@@ -131,6 +132,8 @@ async function ensureEconomyChannels(interaction) {
     const msg = await hub.send(buildHubMessage())
     await msg.pin().catch(()=>{})
   }
+  const questMsg = await buildQuestsMessage()
+  if (questMsg) await quests.send(questMsg).catch(()=>{})
   return { category, hub, shop, leaderboard, quests, announcements, transactions }
 }
 
@@ -146,13 +149,30 @@ function buildHubMessage() {
   return { embeds: [embed], components: [row] }
 }
 
-async function postTxEmbed(type, fields = []) {
+async function buildQuestsMessage() {
+  const res = await fetch(`${apiBase}/quests/${guildId}`).then(r=>r.json()).catch(()=>null)
+  if (!Array.isArray(res)) return null
+  const embed = new EmbedBuilder().setTitle('Quests').setColor(0xf59e0b)
+  if (res.length === 0) embed.setDescription('No quests available.')
+  else for (const q of res) embed.addFields({ name: q.title, value: `${q.reward} coins` })
+  return { embeds: [embed] }
+}
+
+async function postTxEmbed(type, fields = [], opts = {}) {
   const cfg = await getConfig()
-  if (!cfg?.transactionsChannelId) return
-  const ch = await client.channels.fetch(cfg.transactionsChannelId).catch(() => null)
-  if (!ch || !ch.isTextBased()) return
-  const embed = new EmbedBuilder().setTitle(`TX: ${type}`).setColor(type === 'earn' ? 0x22c55e : 0xef4444).addFields(fields)
-  ch.send({ embeds: [embed] }).catch(()=>{})
+  if (cfg?.transactionsChannelId) {
+    const ch = await client.channels.fetch(cfg.transactionsChannelId).catch(() => null)
+    if (ch?.isTextBased()) {
+      const embed = new EmbedBuilder().setTitle(`TX: ${type}`).setColor(type === 'earn' ? 0x22c55e : 0xef4444).addFields(fields)
+      ch.send({ embeds: [embed] }).catch(()=>{})
+    }
+  }
+  if (type === 'earn' && opts.userId && typeof opts.balance === 'number' && cfg?.milestoneChannelId) {
+    if (opts.balance % 10 === 0) {
+      const mch = await client.channels.fetch(cfg.milestoneChannelId).catch(()=>null)
+      if (mch?.isTextBased()) mch.send(`<@${opts.userId}> reached ${opts.balance} coins!`).catch(()=>{})
+    }
+  }
 }
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand()) return
@@ -223,6 +243,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
     await interaction.editReply('Leaderboard refreshed.')
     return
   }
+  if (interaction.commandName === 'milestones_channel') {
+    const ch = interaction.options.getChannel('channel', true)
+    await saveConfig({ milestoneChannelId: ch.id })
+    await interaction.reply({ ephemeral: true, content: `Milestone messages will be sent in ${ch}` })
+    return
+  }
   } catch (e) {
     try { await interaction.reply({ ephemeral: true, content: 'Something went wrong processing your command.' }) } catch {}
   }
@@ -264,12 +290,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
         .setColor(0x0ea5e9)
       return interaction.reply({ ephemeral: true, embeds: [embed] })
     }
+    if (interaction.customId === 'hub:quests') {
+      const data = await fetch(`${apiBase}/quests/${interaction.guildId}`).then(r=>r.json()).catch(()=>null)
+      const embed = new EmbedBuilder().setTitle('Quests').setColor(0xf59e0b)
+      if (Array.isArray(data) && data.length) {
+        for (const q of data) embed.addFields({ name: q.title, value: `${q.reward} coins` })
+      } else {
+        embed.setDescription('No quests available.')
+      }
+      return interaction.reply({ ephemeral: true, embeds: [embed] })
+    }
     if (interaction.customId === 'hub:claim') {
       const res = await fetch(`${apiBase}/wallet/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ discord_id: interaction.user.id, username: interaction.user.username }) }).then(r => r.json()).catch(()=>null)
       if (!res) return interaction.reply({ ephemeral: true, content: 'Error contacting API.' })
       if (res.error === 'cooldown') return interaction.reply({ ephemeral: true, content: `Already claimed. Next at ${res.next_at}` })
       if (res.ok) {
-        await postTxEmbed('earn', [ { name: 'User', value: `<@${interaction.user.id}>` }, { name: 'Reason', value: 'daily_claim' }, { name: 'Amount', value: String(res.amount) } ])
+        await postTxEmbed('earn', [ { name: 'User', value: `<@${interaction.user.id}>` }, { name: 'Reason', value: 'daily_claim' }, { name: 'Amount', value: String(res.amount) } ], { userId: interaction.user.id, balance: res.balance })
         const embed = new EmbedBuilder()
           .setTitle('Daily Reward')
           .setDescription(`You received **${res.amount}** coins!`)
